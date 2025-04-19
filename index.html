@@ -10,8 +10,8 @@
 <body>
   <canvas width="1024" height="1024"></canvas>
   <script type="module">
-    const GRID_SIZE = 32;
-    const UPDATE_INTERVAL_MS = 200;
+    const GRID_SIZE = 1024;
+    const UPDATE_INTERVAL_MS = 1000 / 60; // 60 FPS
     const WORKGROUP_SIZE = 8;
 
     const canvas = document.querySelector("canvas");
@@ -94,12 +94,6 @@
       cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
     }
     device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
-
-    // Fill buffer B by setting every second cell as active.
-    // for (let i = 0; i < cellStateArray.length; i++) {
-    //   cellStateArray[i] = i % 2;
-    // }
-    // device.queue.writeBuffer(cellStateStorage[1], 0, cellStateArray);
 
     // Setup the shaders.
     const cellShaderModule = device.createShaderModule({
