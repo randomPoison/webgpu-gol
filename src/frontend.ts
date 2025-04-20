@@ -1,6 +1,8 @@
 export { };
 
-import { GRID_SIZE, UPDATE_INTERVAL_MS, WORKGROUP_SIZE, GOL_SHADER, buildComputePass } from "./gol";
+import { GRID_SIZE, LifeSimulation } from "./gol";
+
+export const UPDATE_INTERVAL_MS = 1000 / 60;
 
 const canvas = document.querySelector("canvas");
 if (!canvas) {
@@ -12,23 +14,17 @@ if (!navigator.gpu) {
     throw new Error("WebGPU not supported on this browser.");
 }
 
-// Request an adapter and device.
-const adapter = await navigator.gpu.requestAdapter();
-if (!adapter) {
-    throw new Error("No appropriate GPUAdapter found.");
-}
-
-const device = await adapter.requestDevice();
+let gol = await LifeSimulation.create(navigator.gpu);
 
 // Setup the canvas for WebGPU.
-; const canvasContext = canvas.getContext("webgpu");
+const canvasContext = canvas.getContext("webgpu");
 if (!canvasContext) {
     throw new Error("No WebGPU context found.");
 }
 
 const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 canvasContext.configure({
-    device: device,
+    device: gol.device,
     format: canvasFormat,
 });
 
@@ -42,12 +38,12 @@ const vertices = new Float32Array([
     0.8, 0.8,
     -0.8, 0.8,
 ]);
-const vertexBuffer = device.createBuffer({
+const vertexBuffer = gol.device.createBuffer({
     label: "Cell vertices",
     size: vertices.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
 });
-device.queue.writeBuffer(vertexBuffer, 0, vertices);
+gol.device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
 const vertexBufferLayout = {
     arrayStride: 8,
@@ -58,40 +54,8 @@ const vertexBufferLayout = {
     }],
 };
 
-// Create a uniform buffer that describes the grid.
-const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
-const uniformBuffer = device.createBuffer({
-    label: "Grid Uniforms",
-    size: uniformArray.byteLength,
-    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-});
-
-device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
-
-// Setup two storage buffers for cell states.
-const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
-const cellStateStorage = [
-    device.createBuffer({
-        label: "Cell State A",
-        size: cellStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    }),
-    device.createBuffer({
-        label: "Cell State B",
-        size: cellStateArray.byteLength,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-    }),
-];
-
-// Set each cell to a random state, then copy the JavaScript array 
-// into the storage buffer.
-for (let i = 0; i < cellStateArray.length; ++i) {
-    cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
-}
-device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
-
 // Setup the shaders.
-const cellShaderModule = device.createShaderModule({
+const cellShaderModule = gol.device.createShaderModule({
     label: "Cell shader",
     code: `
         struct VertexInput {
@@ -134,71 +98,9 @@ const cellShaderModule = device.createShaderModule({
       `
 });
 
-// Create the bind group layout and pipeline layout.
-const bindGroupLayout = device.createBindGroupLayout({
-    label: "Cell Bind Group Layout",
-    entries: [{
-        binding: 0,
-        visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
-        buffer: {} // Grid uniform buffer
-    }, {
-        binding: 1,
-        visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
-        buffer: { type: "read-only-storage" } // Cell state input buffer
-    }, {
-        binding: 2,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: { type: "storage" } // Cell state output buffer
-    }]
-});
-
-const bindGroups = [
-    device.createBindGroup({
-        label: "Cell renderer bind group A",
-        layout: bindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: { buffer: uniformBuffer },
-            },
-            {
-                binding: 1,
-                resource: { buffer: cellStateStorage[0] },
-            },
-            {
-                binding: 2,
-                resource: { buffer: cellStateStorage[1] },
-            },
-        ],
-    }),
-    device.createBindGroup({
-        label: "Cell renderer bind group B",
-        layout: bindGroupLayout,
-        entries: [
-            {
-                binding: 0,
-                resource: { buffer: uniformBuffer },
-            },
-            {
-                binding: 1,
-                resource: { buffer: cellStateStorage[1] },
-            },
-            {
-                binding: 2,
-                resource: { buffer: cellStateStorage[0] },
-            },
-        ],
-    }),
-];
-
-const pipelineLayout = device.createPipelineLayout({
-    label: "Cell Pipeline Layout",
-    bindGroupLayouts: [bindGroupLayout],
-});
-
-const cellPipeline = device.createRenderPipeline({
+const cellPipeline = gol.device.createRenderPipeline({
     label: "Cell pipeline",
-    layout: pipelineLayout,
+    layout: gol.pipelineLayout,
     vertex: {
         module: cellShaderModule,
         entryPoint: "vertexMain",
@@ -213,27 +115,11 @@ const cellPipeline = device.createRenderPipeline({
     }
 });
 
-// Create the compute shader that will process the simulation.
-const simulationShaderModule = device.createShaderModule({
-    label: "Game of Life simulation shader",
-    code: GOL_SHADER,
-});
-
-// Create a compute pipeline that updates the game state.
-const simulationPipeline = device.createComputePipeline({
-    label: "Simulation pipeline",
-    layout: pipelineLayout,
-    compute: {
-        module: simulationShaderModule,
-        entryPoint: "computeMain",
-    },
-});
-
 let step = 0;
 function updateAndRender() {
-    const encoder = device.createCommandEncoder();
+    const encoder = gol.device.createCommandEncoder();
 
-    buildComputePass(encoder, simulationPipeline, bindGroups, step);
+    gol.buildComputePass(encoder, step);
 
     // Update the step between the render passes such that the output of the
     // computer pass becomes the input of the render pass.
@@ -252,12 +138,12 @@ function updateAndRender() {
     // Draw the grid.
     pass.setPipeline(cellPipeline);
     pass.setVertexBuffer(0, vertexBuffer);
-    pass.setBindGroup(0, bindGroups[step % 2]);
+    pass.setBindGroup(0, gol.bindGroups[step % 2]);
     pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE);
 
     // Finish and submit the render pass.
     pass.end();
-    device.queue.submit([encoder.finish()]);
+    gol.device.queue.submit([encoder.finish()]);
 }
 
 // Run update and render loop.

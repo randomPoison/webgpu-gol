@@ -1,8 +1,8 @@
 export const GRID_SIZE = 1024;
-export const UPDATE_INTERVAL_MS = 1000 / 60;
-export const WORKGROUP_SIZE = 8;
 
-export const GOL_SHADER = `
+const WORKGROUP_SIZE = 8;
+
+const GOL_SHADER = `
     @group(0) @binding(0) var<uniform> grid: vec2f;
 
     @group(0) @binding(1) var<storage> cellStateIn: array<u32>;
@@ -55,16 +55,171 @@ export const GOL_SHADER = `
     }
 `;
 
-export function buildComputePass(encoder: GPUCommandEncoder, pipeline: GPUComputePipeline, bindGroups: GPUBindGroup[], step: number) {
-    const computePass = encoder.beginComputePass({
-        label: "Simulation pass",
-    });
+export class LifeSimulation {
+    gpu: GPU;
+    device: GPUDevice;
+    uniformBuffer: GPUBuffer;
+    cellStateStorage: GPUBuffer[];
+    bindGroupLayout: GPUBindGroupLayout;
+    bindGroups: GPUBindGroup[];
+    pipelineLayout: GPUPipelineLayout;
+    pipeline: GPUComputePipeline;
 
-    computePass.setPipeline(pipeline);
-    computePass.setBindGroup(0, bindGroups[step % 2]);
+    private constructor(
+        gpu: GPU,
+        device: GPUDevice,
+        uniformBuffer: GPUBuffer,
+        cellStateStorage: GPUBuffer[],
+        bindGroupLayout: GPUBindGroupLayout,
+        bindGroups: GPUBindGroup[],
+        pipelineLayout: GPUPipelineLayout,
+        pipeline: GPUComputePipeline,
+    ) {
+        this.gpu = gpu;
+        this.device = device;
+        this.uniformBuffer = uniformBuffer;
+        this.cellStateStorage = cellStateStorage;
+        this.bindGroupLayout = bindGroupLayout;
+        this.bindGroups = bindGroups;
+        this.pipelineLayout = pipelineLayout;
+        this.pipeline = pipeline;
+    }
 
-    const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
-    computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
+    public static async create(gpu: GPU): Promise<LifeSimulation> {
+        const adapter = await gpu.requestAdapter();
+        if (!adapter) {
+            throw new Error("No appropriate GPUAdapter found.");
+        }
 
-    computePass.end();
+        const device = await adapter.requestDevice();
+        if (!device) {
+            throw new Error("No appropriate GPUDevice found.");
+        }
+
+        // Create a uniform buffer that describes the grid.
+        const uniformArray = new Float32Array([GRID_SIZE, GRID_SIZE]);
+        const uniformBuffer = device.createBuffer({
+            label: "Grid Uniforms",
+            size: uniformArray.byteLength,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(uniformBuffer, 0, uniformArray);
+
+        // Setup two storage buffers for cell states.
+        const cellStateArray = new Uint32Array(GRID_SIZE * GRID_SIZE);
+        const cellStateStorage = [
+            device.createBuffer({
+                label: "Cell State A",
+                size: cellStateArray.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            }),
+            device.createBuffer({
+                label: "Cell State B",
+                size: cellStateArray.byteLength,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+            }),
+        ];
+
+        // Set each cell to a random state, then copy the JavaScript array 
+        // into the storage buffer.
+        for (let i = 0; i < cellStateArray.length; ++i) {
+            cellStateArray[i] = Math.random() > 0.6 ? 1 : 0;
+        }
+        device.queue.writeBuffer(cellStateStorage[0], 0, cellStateArray);
+
+        // Create the bind group layout and pipeline layout.
+        const bindGroupLayout = device.createBindGroupLayout({
+            label: "Cell Bind Group Layout",
+            entries: [{
+                binding: 0,
+                visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE,
+                buffer: {} // Grid uniform buffer
+            }, {
+                binding: 1,
+                visibility: GPUShaderStage.VERTEX | GPUShaderStage.COMPUTE,
+                buffer: { type: "read-only-storage" } // Cell state input buffer
+            }, {
+                binding: 2,
+                visibility: GPUShaderStage.COMPUTE,
+                buffer: { type: "storage" } // Cell state output buffer
+            }],
+        });
+
+        const bindGroups = [
+            device.createBindGroup({
+                label: "Cell renderer bind group A",
+                layout: bindGroupLayout,
+                entries: [{
+                    binding: 0,
+                    resource: { buffer: uniformBuffer },
+                }, {
+                    binding: 1,
+                    resource: { buffer: cellStateStorage[0] },
+                }, {
+                    binding: 2,
+                    resource: { buffer: cellStateStorage[1] },
+                }],
+            }),
+            device.createBindGroup({
+                label: "Cell renderer bind group B",
+                layout: bindGroupLayout,
+                entries: [{
+                    binding: 0,
+                    resource: { buffer: uniformBuffer },
+                }, {
+                    binding: 1,
+                    resource: { buffer: cellStateStorage[1] },
+                }, {
+                    binding: 2,
+                    resource: { buffer: cellStateStorage[0] },
+                }],
+            }),
+        ];
+
+        const pipelineLayout = device.createPipelineLayout({
+            label: "Cell Pipeline Layout",
+            bindGroupLayouts: [bindGroupLayout],
+        });
+
+        // Create the compute shader that will process the simulation.
+        const simulationShaderModule = device.createShaderModule({
+            label: "Game of Life simulation shader",
+            code: GOL_SHADER,
+        });
+
+        // Create a compute pipeline that updates the game state.
+        const simulationPipeline = device.createComputePipeline({
+            label: "Simulation pipeline",
+            layout: pipelineLayout,
+            compute: {
+                module: simulationShaderModule,
+                entryPoint: "computeMain",
+            },
+        });
+
+        return new LifeSimulation(
+            gpu,
+            device,
+            uniformBuffer,
+            cellStateStorage,
+            bindGroupLayout,
+            bindGroups,
+            pipelineLayout,
+            simulationPipeline,
+        );
+    }
+
+    public buildComputePass(encoder: GPUCommandEncoder, step: number) {
+        const computePass = encoder.beginComputePass({
+            label: "Simulation pass",
+        });
+
+        computePass.setPipeline(this.pipeline);
+        computePass.setBindGroup(0, this.bindGroups[step % 2]);
+
+        const workgroupCount = Math.ceil(GRID_SIZE / WORKGROUP_SIZE);
+        computePass.dispatchWorkgroups(workgroupCount, workgroupCount);
+
+        computePass.end();
+    }
 }
