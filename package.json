@@ -1,0 +1,12 @@
+{
+  "devDependencies": {
+    "@webgpu/types": "^0.1.60",
+    "esbuild": "^0.25.2",
+    "typescript": "^5.8.3"
+  },
+    "scripts": {
+    "build:frontend": "esbuild src/frontend.ts --bundle --outfile=dist/frontend.js --format=esm",
+    "build:backend": "tsc",
+    "build": "npm run build:frontend && npm run build:backend"
+  }
+}
