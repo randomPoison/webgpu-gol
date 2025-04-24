@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "devDependencies": {
     "@webgpu/types": "^0.1.60",
     "esbuild": "^0.25.2",
@@ -9,6 +10,7 @@
     "build:frontend": "esbuild src/frontend.ts --bundle --outfile=dist/frontend/frontend.js --format=esm",
     "build:backend": "tsc --outDir dist/backend",
     "build": "npm run build:frontend && npm run build:backend",
-    "start": "npm run build && npx serve ."
+    "serve": "npm run build:frontend && npx serve .",
+    "benchmark": "npm run build:backend && node dist/backend/benchmark.js"
   }
 }

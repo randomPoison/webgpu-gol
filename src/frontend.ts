@@ -1,6 +1,6 @@
 export { };
 
-import { GRID_SIZE, LifeSimulation } from "./gol";
+import { GRID_SIZE, LifeSimulation } from "./gol.js";
 
 export const UPDATE_INTERVAL_MS = 1000 / 60;
 
@@ -140,9 +140,9 @@ function updateAndRender() {
     pass.setVertexBuffer(0, vertexBuffer);
     pass.setBindGroup(0, gol.bindGroups[step % 2]);
     pass.draw(vertices.length / 2, GRID_SIZE * GRID_SIZE);
+    pass.end();
 
     // Finish and submit the render pass.
-    pass.end();
     gol.device.queue.submit([encoder.finish()]);
 }
 
