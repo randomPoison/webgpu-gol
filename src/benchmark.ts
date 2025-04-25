@@ -3,6 +3,10 @@ export { };
 import { LifeSimulation } from "./gol.js";
 import { create, globals } from "webgpu";
 
+const WARMUP_ITERATIONS = 100;
+const BENCHMARK_ITERATIONS = 1_000;
+const TEST_RUNS = 3;
+
 Object.assign(globalThis, globals);
 
 console.log("Checking for WebGPU support...");
@@ -18,7 +22,7 @@ console.log("Simulation setup complete.");
 
 console.log("Beginning warmup...");
 const warmupStart = performance.now();
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < WARMUP_ITERATIONS; i++) {
     const encoder = gol.device.createCommandEncoder();
     gol.buildComputePass(encoder, i % 2);
     gol.device.queue.submit([encoder.finish()]);
@@ -30,11 +34,10 @@ const warmupEnd = performance.now();
 console.log(`Warmup took ${(warmupEnd - warmupStart).toFixed(2)}ms`);
 
 let totalDuration = 0;
-const runs = 3;
-for (let run = 1; run <= runs; run++) {
+for (let run = 1; run <= TEST_RUNS; run++) {
     console.log(`Beginning benchmark run ${run}...`);
     const start = performance.now();
-    for (let i = 0; i < 1_000; i++) {
+    for (let i = 0; i < BENCHMARK_ITERATIONS; i++) {
         const encoder = gol.device.createCommandEncoder();
         gol.buildComputePass(encoder, i % 2);
         gol.device.queue.submit([encoder.finish()]);
@@ -45,11 +48,11 @@ for (let run = 1; run <= runs; run++) {
     const end = performance.now();
 
     const durationMs = end - start;
-    const speed = 1_000 / (durationMs / 1_000);
+    const speed = BENCHMARK_ITERATIONS / (durationMs / 1_000);
     console.log(`Run ${run} took ${durationMs.toFixed(2)}ms (${speed.toFixed(2)} iterations per second)`);
     totalDuration += durationMs;
 }
 
-const averageDuration = totalDuration / runs;
-const averageSpeed = 1_000 / (averageDuration / 1_000);
+const averageDuration = totalDuration / TEST_RUNS;
+const averageSpeed = BENCHMARK_ITERATIONS / (averageDuration / 1_000);
 console.log(`Average simulation time: ${averageDuration.toFixed(2)}ms (${averageSpeed.toFixed(2)} iterations per second)`);
