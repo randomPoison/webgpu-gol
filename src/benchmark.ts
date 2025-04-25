@@ -37,14 +37,16 @@ let totalDuration = 0;
 for (let run = 1; run <= TEST_RUNS; run++) {
     console.log(`Beginning benchmark run ${run}...`);
     const start = performance.now();
-    for (let i = 0; i < BENCHMARK_ITERATIONS; i++) {
-        const encoder = gol.device.createCommandEncoder();
-        gol.buildComputePass(encoder, i % 2);
-        gol.device.queue.submit([encoder.finish()]);
 
-        // Wait for the work to be done before starting the next one.
-        await gol.device.queue.onSubmittedWorkDone();
+    const encoder = gol.device.createCommandEncoder();
+    for (let i = 0; i < BENCHMARK_ITERATIONS; i++) {
+        gol.buildComputePass(encoder, i % 2);
     }
+    gol.device.queue.submit([encoder.finish()]);
+
+    // Wait for the work to be done before starting the next one.
+    await gol.device.queue.onSubmittedWorkDone();
+
     const end = performance.now();
 
     const durationMs = end - start;
